@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
@@ -14,7 +14,7 @@ from google.genai import types
 app = FastAPI()
 
 # -------------------------
-# CORS (IMPORTANT FOR VALIDATOR)
+# CORS (IMPORTANT)
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +25,7 @@ app.add_middleware(
 )
 
 # -------------------------
-# REQUEST / RESPONSE MODELS
+# MODELS
 # -------------------------
 class CodeRequest(BaseModel):
     code: str
@@ -34,12 +34,14 @@ class CodeResponse(BaseModel):
     error: List[int]
     result: str
 
+
 # -------------------------
 # HEALTH ROUTE (VERY IMPORTANT)
 # -------------------------
 @app.get("/")
 async def health():
     return {"status": "ok"}
+
 
 # -------------------------
 # TOOL FUNCTION
@@ -60,17 +62,21 @@ def execute_python_code(code: str) -> dict:
     finally:
         sys.stdout = old_stdout
 
+
 # -------------------------
 # AI ERROR ANALYSIS
 # -------------------------
 def analyze_error_with_ai(code: str, tb: str) -> List[int]:
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return []
+
+    client = genai.Client(api_key=api_key)
 
     prompt = f"""
 Analyze this Python code and its error traceback.
-Return ONLY a JSON object in this format:
-
-{{ "error_lines": [line_numbers] }}
+Return ONLY the line number(s) where the error occurred.
 
 CODE:
 {code}
@@ -97,8 +103,9 @@ TRACEBACK:
         ),
     )
 
-    parsed = json.loads(response.text)
-    return parsed["error_lines"]
+    data = json.loads(response.text)
+    return data["error_lines"]
+
 
 # -------------------------
 # MAIN ENDPOINT
@@ -108,23 +115,19 @@ async def code_interpreter(request: CodeRequest):
 
     execution = execute_python_code(request.code)
 
-    # If no error
     if execution["success"]:
         return {
             "error": [],
             "result": execution["output"]
         }
 
-    # If error -> call AI
-    error_lines = analyze_error_with_ai(
-        request.code,
-        execution["output"]
-    )
+    else:
+        error_lines = analyze_error_with_ai(
+            request.code,
+            execution["output"]
+        )
 
-    return {
-        "error": error_lines,
-        "result": execution["output"]
-    }
-@app.get("/")
-async def health():
-    return {"status": "ok"}
+        return {
+            "error": error_lines,
+            "result": execution["output"]
+        }
