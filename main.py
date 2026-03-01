@@ -6,20 +6,27 @@ import sys
 from io import StringIO
 import traceback
 import os
+import json
 
 from google import genai
 from google.genai import types
 
 app = FastAPI()
 
-# CORS
+# -------------------------
+# CORS (IMPORTANT FOR VALIDATOR)
+# -------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
+# -------------------------
+# REQUEST / RESPONSE MODELS
+# -------------------------
 class CodeRequest(BaseModel):
     code: str
 
@@ -27,10 +34,16 @@ class CodeResponse(BaseModel):
     error: List[int]
     result: str
 
+# -------------------------
+# HEALTH ROUTE (VERY IMPORTANT)
+# -------------------------
+@app.get("/")
+async def health():
+    return {"status": "ok"}
 
-# ------------------------
+# -------------------------
 # TOOL FUNCTION
-# ------------------------
+# -------------------------
 def execute_python_code(code: str) -> dict:
     old_stdout = sys.stdout
     sys.stdout = StringIO()
@@ -47,16 +60,17 @@ def execute_python_code(code: str) -> dict:
     finally:
         sys.stdout = old_stdout
 
-
-# ------------------------
+# -------------------------
 # AI ERROR ANALYSIS
-# ------------------------
+# -------------------------
 def analyze_error_with_ai(code: str, tb: str) -> List[int]:
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
     prompt = f"""
 Analyze this Python code and its error traceback.
-Return ONLY the line number(s) where the error occurred.
+Return ONLY a JSON object in this format:
+
+{{ "error_lines": [line_numbers] }}
 
 CODE:
 {code}
@@ -83,32 +97,31 @@ TRACEBACK:
         ),
     )
 
-    data = response.text
-    parsed = eval(data)  # safe because structured JSON enforced
+    parsed = json.loads(response.text)
     return parsed["error_lines"]
 
-
-# ------------------------
-# API ENDPOINT
-# ------------------------
+# -------------------------
+# MAIN ENDPOINT
+# -------------------------
 @app.post("/code-interpreter", response_model=CodeResponse)
 async def code_interpreter(request: CodeRequest):
 
     execution = execute_python_code(request.code)
 
+    # If no error
     if execution["success"]:
         return {
             "error": [],
             "result": execution["output"]
         }
 
-    else:
-        error_lines = analyze_error_with_ai(
-            request.code,
-            execution["output"]
-        )
+    # If error -> call AI
+    error_lines = analyze_error_with_ai(
+        request.code,
+        execution["output"]
+    )
 
-        return {
-            "error": error_lines,
-            "result": execution["output"]
-        }
+    return {
+        "error": error_lines,
+        "result": execution["output"]
+    }
