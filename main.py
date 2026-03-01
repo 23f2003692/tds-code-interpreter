@@ -125,3 +125,6 @@ async def code_interpreter(request: CodeRequest):
         "error": error_lines,
         "result": execution["output"]
     }
+@app.get("/")
+async def health():
+    return {"status": "ok"}
